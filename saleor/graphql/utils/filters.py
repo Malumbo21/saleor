@@ -2,6 +2,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from django.db.models import Q
 from django.utils import timezone
 
 from ..core.enums import ReportingPeriod
@@ -69,7 +70,7 @@ def filter_by_ids(object_type):
     return inner
 
 
-def filter_where_range_field(qs, field, value):
+def filter_where_range_field_with_conditions(qs, field, value):
     if value is None:
         return qs.none()
     range = value.get("range")
@@ -86,6 +87,15 @@ def filter_where_range_field(qs, field, value):
     return qs.none()
 
 
+def filter_where_by_range_field(qs: "QuerySet", field: str, value: dict):
+    if value is None:
+        return qs.none()
+    gte, lte = value.get("gte"), value.get("lte")
+    if gte is None and lte is None:
+        return qs.none()
+    return filter_range_field(qs, field, value)
+
+
 ValueT = str | UUID
 
 
@@ -99,6 +109,8 @@ def filter_where_by_value_field(
         return qs.filter(**{field: value["eq"]})
     if one_of := value.get("one_of"):
         return qs.filter(**{f"{field}__in": one_of})
+    if not_one_of := value.get("not_one_of"):
+        return qs.filter(~Q(**{f"{field}__in": not_one_of}))
     return qs.none()
 
 
@@ -123,6 +135,9 @@ def filter_where_by_numeric_field(
     field: str,
     value: dict[str, Number | list[Number] | dict[str, Number]],
 ):
+    if not value:
+        return qs.none()
+
     one_of = value.get("one_of")
     range = value.get("range")
 
@@ -142,3 +157,15 @@ def filter_where_by_numeric_field(
             qs = qs.filter(**{f"{field}__gte": gte})
         return qs
     return qs.none()
+
+
+def filter_where_by_price_field(qs: "QuerySet", field: str, value: dict) -> "QuerySet":
+    if value is None:
+        return qs.none()
+    if currency := value.get("currency"):
+        qs = qs.filter(currency=currency)
+    return filter_where_range_field_with_conditions(qs, field, value.get("amount", {}))
+
+
+def filter_slug_list(qs, _, values):
+    return qs.filter(slug__in=values)

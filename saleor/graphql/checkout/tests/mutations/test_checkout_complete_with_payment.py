@@ -188,11 +188,14 @@ def test_checkout_complete(
         items={"accepted": "false"}
     )
     checkout.tax_exemption = True
+    checkout.user = customer_user
     checkout.save()
     checkout.metadata_storage.save()
 
     customer_user.addresses.clear()
     user_address_count = customer_user.addresses.count()
+
+    user_orders_count = customer_user.number_of_orders
 
     checkout_line = checkout.lines.first()
     checkout_line_quantity = checkout_line.quantity
@@ -281,6 +284,8 @@ def test_checkout_complete(
     assert order_payment == payment
     assert payment.transactions.count() == 1
 
+    assert order.lines_count == len(lines)
+
     gift_card.refresh_from_db()
     assert gift_card.current_balance == zero_money(gift_card.currency)
     assert gift_card.last_used_on
@@ -313,6 +318,9 @@ def test_checkout_complete(
         set(customer_address_ids)
         & {order.billing_address.pk, order.shipping_address.pk}
     )
+
+    customer_user.refresh_from_db()
+    assert customer_user.number_of_orders == user_orders_count + 1
 
 
 @pytest.mark.integration
@@ -5940,3 +5948,52 @@ def test_checkout_complete_with_different_email_than_user_email(
     order = Order.objects.first()
     assert order.user_email == checkout.email
     assert order.user.email == checkout.user.email
+
+
+def test_checkout_complete_sets_product_type_id_for_all_order_lines(
+    user_api_client,
+    checkout_ready_to_complete,
+    payment_dummy,
+    address,
+):
+    # given
+    checkout = checkout_ready_to_complete
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+
+    variant_id_to_product_type_id_map = {
+        line.variant.id: line.product_type.id for line in lines
+    }
+
+    total = calculations.checkout_total(
+        manager=manager, checkout_info=checkout_info, lines=lines, address=address
+    )
+    payment = payment_dummy
+    payment.is_active = True
+    payment.order = None
+    payment.total = total.gross.amount
+    payment.currency = total.gross.currency
+    payment.checkout = checkout
+    payment.save()
+    assert not payment.transactions.exists()
+
+    variables = {
+        "id": to_global_id_or_none(checkout),
+        "redirectUrl": "https://www.example.com",
+    }
+
+    # when
+    response = user_api_client.post_graphql(MUTATION_CHECKOUT_COMPLETE, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["checkoutComplete"]
+    assert not data["errors"]
+
+    order = Order.objects.first()
+    for line in order.lines.all():
+        assert (
+            line.product_type_id == variant_id_to_product_type_id_map[line.variant_id]
+        )

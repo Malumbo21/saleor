@@ -1,4 +1,5 @@
 import datetime
+import logging
 import os
 from unittest.mock import MagicMock, Mock, patch
 
@@ -138,13 +139,20 @@ def test_collection_query_error_when_id_and_slug_provided(
     collection,
     graphql_log_handler,
 ):
+    # given
+    handled_errors_logger = logging.getLogger("saleor.graphql.errors.handled")
+    handled_errors_logger.setLevel(logging.DEBUG)
     variables = {
         "id": graphene.Node.to_global_id("Collection", collection.pk),
         "slug": collection.slug,
     }
+
+    # when
     response = user_api_client.post_graphql(QUERY_COLLECTION, variables=variables)
+
+    # then
     assert graphql_log_handler.messages == [
-        "saleor.graphql.errors.handled[INFO].GraphQLError"
+        "saleor.graphql.errors.handled[DEBUG].GraphQLError"
     ]
     content = get_graphql_content(response, ignore_errors=True)
     assert len(content["errors"]) == 1
@@ -155,10 +163,17 @@ def test_collection_query_error_when_no_param(
     collection,
     graphql_log_handler,
 ):
+    # given
+    handled_errors_logger = logging.getLogger("saleor.graphql.errors.handled")
+    handled_errors_logger.setLevel(logging.DEBUG)
     variables = {}
+
+    # when
     response = user_api_client.post_graphql(QUERY_COLLECTION, variables=variables)
+
+    # then
     assert graphql_log_handler.messages == [
-        "saleor.graphql.errors.handled[INFO].GraphQLError"
+        "saleor.graphql.errors.handled[DEBUG].GraphQLError"
     ]
     content = get_graphql_content(response, ignore_errors=True)
     assert len(content["errors"]) == 1
@@ -314,9 +329,10 @@ query CollectionProducts(
     $channel: String,
     $filters: ProductFilterInput,
     $where: ProductWhereInput,
+    $search: String,
 ) {
   collection(id: $id, channel: $channel) {
-    products(first: 10, filter: $filters, where: $where) {
+    products(first: 10, filter: $filters, where: $where, search: $search) {
       edges {
         node {
           id
@@ -481,6 +497,33 @@ def test_filter_where_collection_products(
     assert products[0]["node"]["id"] == graphene.Node.to_global_id(
         "Product", product_list[1].pk
     )
+
+
+def test_search_collection_products(
+    user_api_client, product_list, published_collection, channel_USD, channel_PLN
+):
+    # given
+    query = GET_FILTERED_PRODUCTS_COLLECTION_QUERY
+
+    for product in product_list:
+        published_collection.products.add(product)
+
+    product = product_list[0]
+
+    variables = {
+        "id": graphene.Node.to_global_id("Collection", published_collection.pk),
+        "search": product.name,
+        "channel": channel_USD.slug,
+    }
+
+    # when
+    response = user_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    product_data = content["data"]["collection"]["products"]["edges"][0]["node"]
+
+    assert product_data["id"] == graphene.Node.to_global_id("Product", product.pk)
 
 
 CREATE_COLLECTION_MUTATION = """

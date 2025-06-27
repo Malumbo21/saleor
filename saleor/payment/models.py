@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
-from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.indexes import BTreeIndex, GinIndex
 from django.core.serializers.json import DjangoJSONEncoder
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
@@ -20,6 +20,7 @@ from ..permission.enums import PaymentPermissions
 from . import (
     ChargeStatus,
     CustomPaymentChoices,
+    PaymentMethodType,
     StorePaymentMethod,
     TransactionAction,
     TransactionEventType,
@@ -150,10 +151,37 @@ class TransactionItem(ModelWithMetadata):
     # Set to False when automatic refund was triggered.
     last_refund_success = models.BooleanField(default=True)
 
+    cc_first_digits = models.CharField(
+        max_length=4,
+        blank=True,
+        null=True,
+    )
+    cc_last_digits = models.CharField(
+        max_length=4,
+        blank=True,
+        null=True,
+    )
+    cc_brand = models.CharField(max_length=40, blank=True, null=True)
+    cc_exp_month = models.PositiveIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(12)], null=True, blank=True
+    )
+    cc_exp_year = models.PositiveIntegerField(
+        validators=[MinValueValidator(2000)], null=True, blank=True
+    )
+    payment_method_type = models.CharField(
+        max_length=32,
+        blank=True,
+        null=True,
+        choices=PaymentMethodType.CHOICES,
+    )
+    payment_method_name = models.CharField(max_length=256, blank=True, null=True)
+
     class Meta:
         ordering = ("pk",)
         indexes = [
             *ModelWithMetadata.Meta.indexes,
+            BTreeIndex(fields=["payment_method_type"], name="payment_method_type_ids"),
+            BTreeIndex(fields=["cc_brand"], name="cc_brand_idx"),
         ]
         constraints = [
             models.UniqueConstraint(

@@ -575,6 +575,10 @@ def test_order_bulk_create_unit_discount(
     assert db_order_line.unit_discount_value == discount_value
     assert db_order_line.unit_discount_reason == discount_reason
     assert db_order.lines.first() == db_order_line
+    assert (
+        db_order.lines_count == len(order_bulk_input["lines"]) == db_order.lines.count()
+    )
+    assert db_order_line.product_type_id == variant.product.product_type_id
 
 
 def test_order_bulk_create_unit_discount_mismatched_discount(
@@ -650,6 +654,7 @@ def test_order_bulk_create(
     invoice_count = Invoice.objects.count()
     discount_count = OrderDiscount.objects.count()
     voucher_code = "mirumee"
+    user_orders_count = customer_user.number_of_orders
 
     expected_shipping_net_price = Decimal(50)
     expected_shipping_gross_price = Decimal(60)
@@ -768,6 +773,9 @@ def test_order_bulk_create(
     assert db_order.authorize_status == OrderAuthorizeStatus.PARTIAL.lower()
     assert db_order.shipping_address.validation_skipped is False
     assert db_order.billing_address.validation_skipped is False
+    assert (
+        db_order.lines_count == len(order_bulk_input["lines"]) == db_order.lines.count()
+    )
 
     order_line = order["lines"][0]
     assert order_line["variant"]["id"] == graphene.Node.to_global_id(
@@ -957,16 +965,21 @@ def test_order_bulk_create(
     assert Invoice.objects.count() == invoice_count + 1
     assert OrderDiscount.objects.count() == discount_count + 1
 
+    customer_user.refresh_from_db()
+    assert customer_user.number_of_orders == user_orders_count + 1
+
 
 def test_order_bulk_create_multiple_orders(
     staff_api_client,
     permission_manage_orders,
     permission_manage_orders_import,
     order_bulk_input,
+    customer_user,
 ):
     # given
     orders_count = Order.objects.count()
     order_lines_count = OrderLine.objects.count()
+    user_orders_count = customer_user.number_of_orders
 
     order_1 = order_bulk_input
     order_2 = order_bulk_input
@@ -996,6 +1009,9 @@ def test_order_bulk_create_multiple_orders(
     assert order_2["lines"]
     assert Order.objects.count() == orders_count + 2
     assert OrderLine.objects.count() == order_lines_count + 2
+
+    customer_user.refresh_from_db()
+    assert customer_user.number_of_orders == user_orders_count + 2
 
 
 def test_order_bulk_create_multiple_lines(
@@ -1099,6 +1115,9 @@ def test_order_bulk_create_multiple_lines(
     db_order = Order.objects.get()
     assert db_order.total_gross_amount == expected_order_total_gross
     assert db_order.total_net_amount == expected_order_total_net
+    assert (
+        db_order.lines_count == len(order_bulk_input["lines"]) == db_order.lines.count()
+    )
 
     assert OrderLine.objects.count() == lines_count + 2
 
@@ -1173,6 +1192,9 @@ def test_order_bulk_create_line_without_variant(
     db_order = Order.objects.get()
     assert db_order.total_gross_amount == expected_order_total_gross
     assert db_order.total_net_amount == expected_order_total_net
+    assert (
+        db_order.lines_count == len(order_bulk_input["lines"]) == db_order.lines.count()
+    )
 
     error0 = content["data"]["orderBulkCreate"]["results"][0]["errors"][0]
     assert error0["message"] == (

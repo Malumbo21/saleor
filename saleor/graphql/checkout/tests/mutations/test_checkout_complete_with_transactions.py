@@ -266,6 +266,8 @@ def test_checkout_without_any_transaction_allow_to_create_order(
     assert order.authorize_status == OrderAuthorizeStatus.NONE
     assert order.subtotal.gross == get_subtotal(order.lines.all(), order.currency).gross
 
+    assert order.lines_count == len(lines)
+
 
 def test_checkout_with_total_0(
     checkout_with_item_total_0,
@@ -325,6 +327,8 @@ def test_checkout_with_total_0(
     assert order.base_shipping_price_amount == 0
     assert order.undiscounted_base_shipping_price_amount == 0
 
+    assert order.lines_count == len(lines)
+
 
 def test_checkout_with_authorized(
     user_api_client,
@@ -333,6 +337,7 @@ def test_checkout_with_authorized(
     transaction_item_generator,
     address,
     shipping_method,
+    customer_user,
 ):
     # given
     checkout = checkout_with_gift_card
@@ -344,8 +349,11 @@ def test_checkout_with_authorized(
         items={"accepted": "false"}
     )
     checkout.tax_exemption = True
+    checkout.user = customer_user
     checkout.save()
     checkout.metadata_storage.save()
+
+    user_number_of_orders = customer_user.number_of_orders
 
     checkout_line = checkout.lines.first()
     checkout_line_quantity = checkout_line.quantity
@@ -427,8 +435,13 @@ def test_checkout_with_authorized(
     assert order.base_shipping_price_amount == shipping_price.amount
     assert order.undiscounted_base_shipping_price_amount == shipping_price.amount
 
+    assert order.lines_count == len(lines)
+
     assert not Checkout.objects.filter()
     assert not len(Reservation.objects.all())
+
+    customer_user.refresh_from_db()
+    assert customer_user.number_of_orders == user_number_of_orders + 1
 
 
 def test_checkout_with_charged(
@@ -438,6 +451,7 @@ def test_checkout_with_charged(
     transaction_item_generator,
     address,
     shipping_method,
+    customer_user,
 ):
     # given
     checkout = checkout_with_gift_card
@@ -449,8 +463,11 @@ def test_checkout_with_charged(
         items={"accepted": "false"}
     )
     checkout.tax_exemption = True
+    checkout.user = customer_user
     checkout.save()
     checkout.metadata_storage.save()
+
+    user_number_of_orders = customer_user.number_of_orders
 
     checkout_line = checkout.lines.first()
     checkout_line_quantity = checkout_line.quantity
@@ -526,8 +543,13 @@ def test_checkout_with_charged(
         order.shipping_tax_class_private_metadata == shipping_tax_class.private_metadata
     )
 
+    assert order.lines_count == len(lines)
+
     assert not Checkout.objects.filter()
     assert not len(Reservation.objects.all())
+
+    customer_user.refresh_from_db()
+    assert customer_user.number_of_orders == user_number_of_orders + 1
 
 
 def test_checkout_price_override(
@@ -628,6 +650,8 @@ def test_checkout_price_override(
     assert (
         order.shipping_tax_class_private_metadata == shipping_tax_class.private_metadata
     )
+
+    assert order.lines_count == len(lines)
 
     assert not Checkout.objects.filter()
 
@@ -5411,3 +5435,52 @@ def test_checkout_complete_with_different_email_than_user_email(
     order = Order.objects.first()
     assert order.user_email == checkout.email
     assert order.user.email == checkout.user.email
+
+
+def test_checkout_complete_sets_product_type_id_for_all_order_lines(
+    user_api_client,
+    checkout_ready_to_complete,
+    address,
+    address_usa,
+    shipping_method,
+    transaction_events_generator,
+    transaction_item_generator,
+    customer_user,
+):
+    # given
+    checkout = prepare_checkout_for_test(
+        checkout_ready_to_complete,
+        address,
+        address_usa,
+        shipping_method,
+        transaction_item_generator,
+        transaction_events_generator,
+        user=customer_user,
+        save_billing_address=True,
+        save_shipping_address=True,
+    )
+
+    lines, _ = fetch_checkout_lines(checkout)
+
+    variant_id_to_product_type_id_map = {
+        line.variant.id: line.product_type.id for line in lines
+    }
+
+    variables = {
+        "id": to_global_id_or_none(checkout),
+        "redirectUrl": "https://www.example.com",
+    }
+
+    # when
+    response = user_api_client.post_graphql(MUTATION_CHECKOUT_COMPLETE, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["checkoutComplete"]
+    assert not data["errors"]
+
+    order = Order.objects.first()
+    for line in order.lines.all():
+        assert (
+            line.product_type_id == variant_id_to_product_type_id_map[line.variant_id]
+        )
