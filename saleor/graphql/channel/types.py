@@ -1,12 +1,10 @@
 import collections
 import itertools
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING
 
 import graphene
-from django.db.models import Model
 from django_countries.fields import Country
 from graphene.types.objecttype import ObjectType
-from graphene.types.resolver import get_default_resolver
 from promise import Promise
 
 from ...channel import models
@@ -34,14 +32,12 @@ from ..core.doc_category import (
     DOC_CATEGORY_TAXES,
 )
 from ..core.fields import PermissionsField
-from ..core.scalars import Day, Hour, Minute
+from ..core.scalars import DateTime, Day, Hour, Minute
 from ..core.types import BaseObjectType, CountryDisplay, ModelObjectType, NonNullList
 from ..meta.types import ObjectWithMetadata
 from ..tax.dataloaders import TaxConfigurationByChannelId
-from ..translations.resolvers import resolve_translation
 from ..warehouse.dataloaders import WarehousesByChannelIdLoader
 from ..warehouse.types import Warehouse
-from . import ChannelContext
 from .dataloaders import ChannelWithHasOrdersByIdLoader
 from .enums import (
     AllocationStrategyEnum,
@@ -51,56 +47,6 @@ from .enums import (
 
 if TYPE_CHECKING:
     from ...shipping.models import ShippingZone
-
-T = TypeVar("T", bound=Model)
-
-
-class ChannelContextTypeForObjectType(ModelObjectType[T]):
-    """A Graphene type that supports resolvers' root as ChannelContext objects."""
-
-    class Meta:
-        abstract = True
-
-    @staticmethod
-    def resolver_with_context(
-        attname, default_value, root: ChannelContext, info: ResolveInfo, **args
-    ):
-        resolver = get_default_resolver()
-        return resolver(attname, default_value, root.node, info, **args)
-
-    @staticmethod
-    def resolve_id(root: ChannelContext[T], _info: ResolveInfo):
-        return root.node.pk
-
-    @staticmethod
-    def resolve_translation(
-        root: ChannelContext[T], info: ResolveInfo, *, language_code
-    ):
-        # Resolver for TranslationField; needs to be manually specified.
-        return resolve_translation(root.node, info, language_code=language_code)
-
-
-class ChannelContextType(ChannelContextTypeForObjectType[T]):
-    """A Graphene type that supports resolvers' root as ChannelContext objects."""
-
-    class Meta:
-        abstract = True
-
-    @classmethod
-    def is_type_of(cls, root: ChannelContext[T] | T, _info: ResolveInfo) -> bool:
-        # Unwrap node from ChannelContext if it didn't happen already
-        if isinstance(root, ChannelContext):
-            root = root.node
-
-        if isinstance(root, cls):
-            return True
-
-        if cls._meta.model._meta.proxy:
-            model = root._meta.model
-        else:
-            model = cast(type[Model], root._meta.model._meta.concrete_model)
-
-        return model == cls._meta.model
 
 
 class StockSettings(BaseObjectType):
@@ -243,6 +189,29 @@ class PaymentSettings(ObjectType):
             "Determine the transaction flow strategy to be used. "
             "Include the selected option in the payload sent to the payment app, as a "
             "requested action for the transaction."
+        ),
+    )
+    release_funds_for_expired_checkouts = graphene.Boolean(
+        required=False,
+        description=(
+            "Determine if the funds for expired checkouts should be released automatically."
+            + ADDED_IN_320
+        ),
+    )
+    checkout_ttl_before_releasing_funds = Hour(
+        required=False,
+        description=(
+            "The time in hours after which funds for expired checkouts will be released."
+            + ADDED_IN_320
+        ),
+    )
+    checkout_release_funds_cut_off_date = DateTime(
+        required=False,
+        description=(
+            "Specifies the earliest date on which funds for expired checkouts can begin "
+            "to be released. Expired checkouts dated before this cut-off will not have their "
+            "funds released. Additionally, no funds will be released for checkouts that are "
+            "more than one year old, regardless of the cut-off date." + ADDED_IN_320
         ),
     )
 
@@ -547,4 +516,8 @@ class Channel(ModelObjectType):
     def resolve_payment_settings(root: models.Channel, _info):
         return PaymentSettings(
             default_transaction_flow_strategy=root.default_transaction_flow_strategy,
+            release_funds_for_expired_checkouts=root.release_funds_for_expired_checkouts,
+            checkout_ttl_before_releasing_funds=root.checkout_ttl_before_releasing_funds.seconds
+            // 3600,
+            checkout_release_funds_cut_off_date=root.checkout_release_funds_cut_off_date,
         )
